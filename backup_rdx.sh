@@ -45,8 +45,6 @@ if [ ! -f $CONF ]
 		usage
 		exit 1
 fi
-echo "$CONF"
-exit 0
 
 . $CONF
 
@@ -270,7 +268,7 @@ function distBackup {
 		sleep 40
 
 		# on vérifie que la machine est bien rallumée
-		ssh $SSHUSER@$SSHHOST sudo virsh list --all | grep "running" | grep "$vm" || { journal "\nProblème Redémarrage vm $vm ! Sortie du programme.";verifStarted $vm dist "$SSHUSER" "$SSHHOST";terminate;}
+		ssh $SSHUSER@$SSHHOST LANG=C sudo virsh list --all | grep "running" | grep "$vm" || { journal "\nProblème Redémarrage vm $vm ! Sortie du programme.";verifStarted $vm dist "$SSHUSER" "$SSHHOST";terminate;}
 	
 		journal "\nVM $vm sauvegardée et redémarée."
 	
@@ -363,7 +361,7 @@ function backup {
 		sleep 40
 
 		# on vérifie que la machine est bien rallumée
-		virsh list --all | grep "running" | grep "$vm" || { journal "\nProblème Redémarrage vm $vm ! Sortie du programme.";verifStarted $vm loc;terminate;}
+		LANG=C virsh list --all | grep "running" | grep "$vm" || { journal "\nProblème Redémarrage vm $vm ! Sortie du programme.";verifStarted $vm loc;terminate;}
 	
 		journal "\nVM $vm sauvegardée et redémarée."
 	
@@ -458,7 +456,6 @@ function init {
 # 	MAIN 
 #
 ######################################################
-journal "*** Programme Sauvegarde RDX Backup ***\n\n`date +%c`"
 
 # Doit être root
 # Run as root if you don't want to get permission limits
@@ -468,7 +465,6 @@ if [ "$UID" -ne "$ROOT_UID" ]
          exit $E_NOTROOT
 fi
 
-
 # Création des répertoire définis plus haut s'ils n'existent pas
 [ -d $LOGS ] || { journal "\nCréation du répertoire de logs dans $LOGS";mkdir -p $LOGS;}
 
@@ -476,12 +472,14 @@ fi
 
 [ -d $MOUNTPOINT ] || { journal "\nCréation du répertoire où monter le snapshot dans $MOUNTPOINT";mkdir -p $MOUNTPOINT;}
 
+journal "*** Programme Sauvegarde RDX Backup ***\n\n`date +%c`"
+
 # retourne la liste des machines virtuelles lancées dans un tableau
 # Utilisée par la suite dans les fonctions de backup
 
 if [ ${#listvm[@]} -eq 0 ]
 	then
-		listvm=(`virsh list | grep running | sed 's/\(\s\)\(\s\)*/\1/g' |  cut -d" " -f3`)
+		listvm=(`LANG=C virsh list | grep running | sed 's/\(\s\)\(\s\)*/\1/g' |  cut -d" " -f3`)
 fi
 
 # affichage du tableau à titre informatif
