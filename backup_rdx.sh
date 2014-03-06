@@ -32,14 +32,23 @@
 #	* Règle crontab a ajouter :
 #	/etc/crontab:00 10	* * 1-5	root	/root/sbin/backup-RDX.sh >> /root/journal_backup/journal_`date +\%F`.log 2>&1
 #################################################################
+usage() {
+	echo "$0 [backup_rdx.conf]"
+	echo "Le fichier de conf est obligatoire le fichier backup_rdx.conf local au dossier est utilisé par défaut"
+}
 
-# Où envoyer le mail
-POSTMASTER="root"
+CONF=$1
+CONF=${CONF:="./backup_rdx.conf"}
 
-# Sujet du mail
-QUI="RDX Backup"
+if [ ! -f $CONF ]
+	then
+		usage
+		exit 1
+fi
+echo "$CONF"
+exit 0
 
-
+. $CONF
 
 ROOT_UID=0     # Only users with $UID 0 have root privileges.
 E_NOTROOT=87   # Non-root exit error.
@@ -47,55 +56,16 @@ E_NOTROOT=87   # Non-root exit error.
 E_BAD_ARGS=65	# Mauvais arguments passés en appel du programme
 E_PARAM_ERR=85  # Param error.
 
-# UUID autorisés (vérification supplémentaire)
-#UUIDS=('' '' '' ...)
-UUIDS=()
-
-# Où sauvegarder les fichiers images des VMs, montage fixe via règle udev
-BACKDIR=/mnt/RDXbackup
-
-# Quel périphérique monter (voir règles udev)
-PERIPH=/dev/RDXbackup
-FSTYPE=ext4
-
-# si sauvegarde par snapshot
-MOUNTPOINT=/mnt/snapshot
-
-# Répertoire de logs
-LOGS=/var/log/rdxbackup-log
-LOGFILE="$(date +%F_%H-%M).log"
-
 
 #################################################
 #
 # Ecrit au fur et à mesure dans les logs du jour
 #
 #################################################
+# Permet la vérification / le débugage du déroulement du script.
 function journal {
         echo -e "$(date) -- $1" >> $LOGS/$LOGFILE
 }
-
-# Permet la vérification / le débugage du déroulement du script.
-journal "*** Programme Sauvegarde RDX Backup ***\n\n`date +%c`"
-
-
-# Doit être root
-# Run as root if you don't want to get permission limits
-if [ "$UID" -ne "$ROOT_UID" ]
-    then
-        echo "Vous n'êtes pas en mode root. Sortie du programme."
-         exit $E_NOTROOT
-fi
-
-
-# Création des répertoire définis plus haut s'ils n'existent pas
-[ -d $LOGS ] || { journal "\nCréation du répertoire de logs dans $LOGS";mkdir -p $LOGS;}
-
-[ -d $BACKDIR ] || { journal "\nCréation du répertoire où monter le disque de sauvegarde dans $BACKDIR";mkdir -p $BACKDIR;}
-
-[ -d $MOUNTPOINT ] || { journal "\nCréation du répertoire où monter le snapshot dans $MOUNTPOINT";mkdir -p $MOUNTPOINT;}
-
-
 
 #################################################
 #
@@ -488,10 +458,28 @@ function init {
 # 	MAIN 
 #
 ######################################################
+journal "*** Programme Sauvegarde RDX Backup ***\n\n`date +%c`"
+
+# Doit être root
+# Run as root if you don't want to get permission limits
+if [ "$UID" -ne "$ROOT_UID" ]
+    then
+        echo "Vous n'êtes pas en mode root. Sortie du programme."
+         exit $E_NOTROOT
+fi
+
+
+# Création des répertoire définis plus haut s'ils n'existent pas
+[ -d $LOGS ] || { journal "\nCréation du répertoire de logs dans $LOGS";mkdir -p $LOGS;}
+
+[ -d $BACKDIR ] || { journal "\nCréation du répertoire où monter le disque de sauvegarde dans $BACKDIR";mkdir -p $BACKDIR;}
+
+[ -d $MOUNTPOINT ] || { journal "\nCréation du répertoire où monter le snapshot dans $MOUNTPOINT";mkdir -p $MOUNTPOINT;}
 
 # retourne la liste des machines virtuelles lancées dans un tableau
 # Utilisée par la suite dans les fonctions de backup
-if [ $listvm == "" ]
+
+if [ ${#listvm[@]} -eq 0 ]
 	then
 		listvm=(`virsh list | grep running | sed 's/\(\s\)\(\s\)*/\1/g' |  cut -d" " -f3`)
 fi
@@ -502,39 +490,51 @@ journal "\nListe des machines virtuelles allumées  = ${listvm[*]}"
 # Identification, déchiffrage et montage du disque de sauvegarde
 init
 
-	journal "Derniers changements effectués sur les fichiers : \n"
-        ls -lcha $BACKDIR >> $LOGS/$LOGFILE
-	journal "Taille totale sur la cassette : \n"
-	du -ch --max-depth=1 $BACKDIR >> $LOGS/$LOGFILE
+journal "Derniers changements effectués sur les fichiers : \n"
+ls -lcha $BACKDIR >> $LOGS/$LOGFILE
+journal "Taille totale sur la cassette : \n"
+du -ch --max-depth=1 $BACKDIR >> $LOGS/$LOGFILE
 
-	# Sauvegarde de /etc et liste des paquets installés sur l'hôte
-	journal "Archivage du dossier /etc de l'hôte..."
-	tar czf $BACKDIR/backupHote.etc.tgz /etc >> $LOGS/$LOGFILE 2>&1 || { journal "ECHEC !";}
-	journal "Sauvegarde de la liste des paquets intallés sur l'hôte..."
-	dpkg --get-selections > $BACKDIR/dpkg.bak || { journal -n "ECHEC !";}
+if [ ${#listvm[@]} -ne 0 ] 
+	then
+	journal "\nVM allumée(s) :  ${#listvm[*]}"	
+
+	# Arrêt d'une machine, puis backup, puis redémarrage
+	for item in ${listvm[@]}
+	do
+		backup $item 2>>$LOGS/$LOGFILE
+	done
+else
+	journal "\n\nAucune VMs en fonctionnement ! Est-ce voulu ? Le programme continu, peut-être que des sauvegardes à distance sont programmées...\n"
+fi
+
+# Sauvegarde de /etc et liste des paquets installés sur l'hôte
+journal "Archivage du dossier /etc de l'hôte..."
+tar czf $BACKDIR/backupHote.etc.tgz /etc >> $LOGS/$LOGFILE 2>&1 || { journal "ECHEC !";}
+journal "Sauvegarde de la liste des paquets intallés sur l'hôte..."
+dpkg --get-selections > $BACKDIR/dpkg.bak || { journal -n "ECHEC !";}
 	
+# Exemple de sauvegarde de la VM RDXmail à distance
+###	distBackup RDXmail "RDXbackup" "host.entreprise.local"
 
-	# Exemple de sauvegarde de la VM RDXmail à distance
-	###	distBackup RDXmail "RDXbackup" "host.entreprise.local"
-
-	# Sauvegarde par snapshot (LV VG type_système_fichier)
-	###	snapshot LV VG type_système_fichier
+# Sauvegarde par snapshot (LV VG type_système_fichier)
+###	snapshot LV VG type_système_fichier
 
 
-	# Fermetures...
-	journal "Fin de la sauvegarde."
-	journal "Derniers changements effectués sur les fichiers : \n"
-        ls -lcha $BACKDIR >> $LOGS/$LOGFILE
-	journal "Taille totale sur la cassette : \n"
-	du -ch --max-depth=1 $BACKDIR >> $LOGS/$LOGFILE
+# Fermetures...
+journal "Fin de la sauvegarde."
+journal "Derniers changements effectués sur les fichiers : \n"
+ls -lcha $BACKDIR >> $LOGS/$LOGFILE
+journal "Taille totale sur la cassette : \n"
+du -ch --max-depth=1 $BACKDIR >> $LOGS/$LOGFILE
 
-	# Démontage et éjection du périphérique
-	umount $BACKDIR 2>>$LOGS/$LOGFILE || { journal "problème démontage $BACKDIR";terminate;}
-	
-	# Ejection de la cassette
-	eject $PERIPH 2>>$LOGS/$LOGFILE || { journal "problème éjection $PERIPH";terminate;}
+# Démontage et éjection du périphérique
+umount $BACKDIR 2>>$LOGS/$LOGFILE || { journal "problème démontage $BACKDIR";terminate;}
 
-	echo -e "`date +%c` => Tout s'est bien passé. \n\n$LOGBACKUP"  >> $LOGS/$LOGFILE
-	cat $LOGS/$LOGFILE | /usr/bin/mutt -s "OK Backup $QUI" $POSTMASTER
+# Ejection de la cassette
+eject $PERIPH 2>>$LOGS/$LOGFILE || { journal "problème éjection $PERIPH";terminate;}
+
+echo -e "`date +%c` => Tout s'est bien passé. \n\n$LOGBACKUP"  >> $LOGS/$LOGFILE
+cat $LOGS/$LOGFILE | /usr/bin/mutt -s "OK Backup $QUI" $POSTMASTER
 
 exit 0
